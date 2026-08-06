@@ -355,6 +355,7 @@ class SyncOpenViking:
         include_source: bool = False,
         level: Optional[int] = None,
         target_uri: Optional[str] = None,
+        include_integrity: bool = False,
     ) -> Dict[str, Any]:
         """Get a skill by name."""
         return run_async(
@@ -362,6 +363,7 @@ class SyncOpenViking:
                 skill_name=skill_name,
                 include_content=include_content,
                 include_files=include_files,
+                include_integrity=include_integrity,
                 include_source=include_source,
                 level=level,
                 target_uri=target_uri,

@@ -377,9 +377,7 @@ class AsyncHTTPClient:
         self._extra_headers = config.extra_headers
         self._profile_enabled = config.profile_enabled
         self._upload_mode = config.upload_mode
-        self._event_hooks = {
-            event: list(hooks) for event, hooks in (event_hooks or {}).items()
-        }
+        self._event_hooks = {event: list(hooks) for event, hooks in (event_hooks or {}).items()}
         self._http: Optional[httpx.AsyncClient] = None
         self._observer: Optional[_HTTPObserver] = None
         self._snapshot: Optional["AsyncHTTPSnapshotNamespace"] = None
@@ -811,9 +809,11 @@ class AsyncHTTPClient:
         include_source: bool = False,
         level: Optional[int] = None,
         target_uri: Optional[str] = None,
+        include_integrity: bool = False,
     ) -> Dict[str, Any]:
         params: Dict[str, Any] = {
             "include_files": include_files,
+            "include_integrity": include_integrity,
             "include_source": include_source,
         }
         if include_content is not None:
@@ -1977,12 +1977,14 @@ class SyncHTTPClient:
         include_source: bool = False,
         level: Optional[int] = None,
         target_uri: Optional[str] = None,
+        include_integrity: bool = False,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.get_skill(
                 skill_name,
                 include_content=include_content,
                 include_files=include_files,
+                include_integrity=include_integrity,
                 include_source=include_source,
                 level=level,
                 target_uri=target_uri,
@@ -2737,9 +2739,7 @@ class SyncHTTPSnapshotNamespace:
         from_ref: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Compare one file between two snapshot refs."""
-        return run_async(
-            self._ns().diff(path, from_ref=from_ref, to_ref=to_ref)
-        )
+        return run_async(self._ns().diff(path, from_ref=from_ref, to_ref=to_ref))
 
     def get_gitignore(self) -> str:
         return run_async(self._ns().get_gitignore())

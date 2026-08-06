@@ -11,7 +11,6 @@ from openviking.core.peer_id import normalize_peer_id
 from openviking.core.skill_loader import validate_skill_format
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers.skills import (
-    _list_skill_files,
     _list_skills_from_root,
     _require_skill,
     _restore_skill_privacy,
@@ -305,16 +304,10 @@ class LocalClient(BaseClient):
         include_source: bool = False,
         level: Optional[int] = None,
         target_uri: Optional[str] = None,
+        include_integrity: bool = False,
     ) -> Dict[str, Any]:
         """Get a skill by name."""
-        from openviking.server.routers.skills import (
-            SOURCE_METADATA_FILENAME,
-            _parse_abstract_meta,
-            _relative_skill_path,
-            _skill_file_kind,
-            _skill_summary_from_meta,
-        )
-        from openviking.server.skill_source_metadata import read_skill_source_metadata
+        from openviking.server.routers.skills import _read_skill_detail
 
         if level is not None and level not in {0, 1, 2}:
             raise InvalidArgumentError(
@@ -326,44 +319,17 @@ class LocalClient(BaseClient):
         ctx = self._ctx
         root_uri = await _require_skill(service, ctx, skill_name, target_uri)
 
-        abstract = await service.fs.abstract(root_uri, ctx=ctx)
-        result = _skill_summary_from_meta(skill_name, root_uri, _parse_abstract_meta(abstract))
-
-        if level is None or level == 0:
-            result["abstract"] = abstract
-        if level is None or level == 1:
-            result["overview"] = await service.fs.overview(root_uri, ctx=ctx)
-        if (
-            level == 2
-            or include_content is True
-            or (level is None and include_content is not False)
-        ):
-            from openviking.server.routers.skills import _skill_md_uri
-
-            result["content"] = await service.fs.read(_skill_md_uri(root_uri), ctx=ctx)
-
-        if include_files:
-            entries = await _list_skill_files(service, ctx, root_uri)
-            result["files"] = [
-                {
-                    "name": entry.get("name") or skill_name,
-                    "uri": entry.get("uri", ""),
-                    "path": _relative_skill_path(root_uri, entry.get("uri", "")),
-                    "is_dir": entry.get("isDir", False),
-                    "kind": _skill_file_kind(
-                        _relative_skill_path(root_uri, entry.get("uri", "")),
-                        entry.get("isDir", False),
-                    ),
-                }
-                for entry in entries
-                if isinstance(entry, dict)
-                and _relative_skill_path(root_uri, entry.get("uri", "")) != SOURCE_METADATA_FILENAME
-            ]
-
-        if include_source:
-            result["source"] = await read_skill_source_metadata(service, ctx, root_uri)
-
-        return result
+        return await _read_skill_detail(
+            service,
+            ctx,
+            skill_name=skill_name,
+            root_uri=root_uri,
+            include_content=include_content,
+            include_files=include_files,
+            include_integrity=include_integrity,
+            include_source=include_source,
+            level=level,
+        )
 
     async def update_skill(
         self,

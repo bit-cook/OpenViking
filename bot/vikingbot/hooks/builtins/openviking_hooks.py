@@ -403,7 +403,11 @@ class OpenVikingPostCallHook(Hook):
                 await ov_client.close()
 
     async def execute(self, context: HookContext, tool_name, params, result) -> Any:
-        if tool_name == "read_file":
+        is_skill_read = tool_name == "read_file" or (
+            tool_name == "openviking_multi_read"
+            and any(str(uri).rstrip("/").endswith("/SKILL.md") for uri in params.get("uris", []))
+        )
+        if is_skill_read:
             if result and not isinstance(result, Exception):
                 match = re.search(r"^---\s*\nname:\s*(.+?)\s*\n", result, re.MULTILINE)
                 if match:

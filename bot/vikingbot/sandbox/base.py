@@ -1,6 +1,8 @@
 """Abstract interface for sandbox backends."""
 
 import asyncio
+import re
+import shutil
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
@@ -135,6 +137,31 @@ class SandboxBackend(ABC):
         self._check_path_restriction(sandbox_path)
         sandbox_path.parent.mkdir(parents=True, exist_ok=True)
         sandbox_path.write_text(content, encoding="utf-8")
+
+    async def write_file_bytes(self, path: str, content: bytes) -> None:
+        """Write binary content inside the sandbox workspace."""
+        sandbox_path = self._resolve_path(path)
+        self._check_path_restriction(sandbox_path)
+        sandbox_path.parent.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(sandbox_path.write_bytes, content)
+
+    async def remove_tree(self, path: str) -> None:
+        """Remove one sandbox-relative directory tree."""
+        sandbox_path = self._resolve_path(path)
+        self._check_path_restriction(sandbox_path)
+        if sandbox_path.resolve() == self.workspace.resolve():
+            raise PermissionError("Refusing to remove the sandbox workspace root")
+        if sandbox_path.exists():
+            await asyncio.to_thread(shutil.rmtree, sandbox_path)
+
+    @staticmethod
+    def _ensure_command_succeeded(output: str, operation: str) -> None:
+        """Raise when a backend's rendered command result contains a non-zero exit code."""
+        exit_codes = [
+            int(value) for value in re.findall(r"(?:^|\n)Exit code:\s*(-?\d+)(?:\n|$)", str(output))
+        ]
+        if any(code != 0 for code in exit_codes):
+            raise SandboxExecutionError(f"{operation} failed: {output}")
 
     async def list_dir(self, path: str) -> list[tuple[str, bool]]:
         """List directory in sandbox (default implementation: host filesystem).

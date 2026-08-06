@@ -1,5 +1,7 @@
 """AIO Sandbox backend implementation using agent-sandbox SDK."""
 
+import base64
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -119,6 +121,21 @@ class AioSandboxBackend(SandboxBackend):
             logger.error(f"[AioSandbox] Failed to read file {path}: {e}")
             raise
 
+    async def read_file_bytes(self, path: str) -> bytes:
+        """Stream raw file bytes from AIO Sandbox using the SDK download API."""
+        if not self._client:
+            raise SandboxNotStartedError()
+
+        sandbox_path = path if path.startswith("/") else f"/home/gem/{path}"
+        try:
+            chunks = [
+                bytes(chunk) async for chunk in self._client.file.download_file(path=sandbox_path)
+            ]
+            return b"".join(chunks)
+        except Exception as e:
+            logger.error(f"[AioSandbox] Failed to read binary file {path}: {e}")
+            raise
+
     async def write_file(self, path: str, content: str) -> None:
         """Write file to AIO Sandbox using SDK."""
         if not self._client:
@@ -135,6 +152,29 @@ class AioSandboxBackend(SandboxBackend):
         except Exception as e:
             logger.error(f"[AioSandbox] Failed to write file {path}: {e}")
             raise
+
+    async def write_file_bytes(self, path: str, content: bytes) -> None:
+        """Write binary content through the AIO Sandbox file API."""
+        if not self._client:
+            raise SandboxNotStartedError()
+        sandbox_path = path if path.startswith("/") else f"/home/gem/{path}"
+        encoded = base64.b64encode(content).decode("ascii")
+        result = await self._client.file.write_file(
+            file=sandbox_path,
+            content=encoded,
+            encoding="base64",
+        )
+        if result.success is False:
+            raise RuntimeError(f"Write failed: {result.message}")
+
+    async def remove_tree(self, path: str) -> None:
+        if not self._client:
+            raise SandboxNotStartedError()
+        if not path or path.startswith("/") or ".." in Path(path).parts:
+            raise PermissionError("remove_tree requires a safe sandbox-relative path")
+        sandbox_path = f"/home/gem/{path}"
+        output = await self.execute(f"rm -rf -- {shlex.quote(sandbox_path)}")
+        self._ensure_command_succeeded(output, "sandbox tree removal")
 
     async def list_dir(self, path: str) -> list[tuple[str, bool]]:
         """List directory in AIO Sandbox using SDK."""
