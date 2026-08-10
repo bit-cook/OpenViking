@@ -395,7 +395,10 @@ async def test_streaming_memory_updater_holds_batch_pathlock_across_apply(monkey
     assert result.written_uris == [operation.uris[0]]
     assert fs.events[0] == (
         "acquire",
-        ("/user/u/memories/notes/locked_note.md",),
+        (
+            "/user/u/memories/notes/.overview.md",
+            "/user/u/memories/notes/locked_note.md",
+        ),
         300.0,
     )
     assert fs.events[-1] == ("release", lease)
@@ -438,10 +441,35 @@ def test_operation_lock_paths_cover_deletes_replacements_and_link_endpoints():
     )
 
     assert _operation_lock_paths(operations, fs, _ctx()) == [
+        "/user/u/memories/notes/.overview.md",
         "/user/u/memories/notes/deleted.md",
         "/user/u/memories/notes/inherited_neighbor.md",
         "/user/u/memories/notes/neighbor.md",
         "/user/u/memories/notes/replacement.md",
+        "/user/u/memories/notes/updated.md",
+    ]
+
+
+def test_operation_lock_paths_cover_each_affected_overview_directory():
+    fs = PathlockedInMemoryVikingFS({})
+    operation = _note_op("updated")
+    deleted_uri = "viking://user/u/memories/events/2023/02/01/deleted.md"
+    deleted_file = MemoryFile(
+        uri=deleted_uri,
+        content="deleted",
+        memory_type="events",
+        extra_fields={"event_name": "deleted"},
+    )
+    operations = ResolvedOperations(
+        upsert_operations=[operation],
+        delete_file_contents=[deleted_file],
+        errors=[],
+    )
+
+    assert _operation_lock_paths(operations, fs, _ctx()) == [
+        "/user/u/memories/events/2023/02/01/.overview.md",
+        "/user/u/memories/events/2023/02/01/deleted.md",
+        "/user/u/memories/notes/.overview.md",
         "/user/u/memories/notes/updated.md",
     ]
 

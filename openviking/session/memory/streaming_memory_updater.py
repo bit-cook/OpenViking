@@ -1848,7 +1848,13 @@ def _operation_lock_paths(
     viking_fs: Any | None,
     ctx: RequestContext,
 ) -> list[str]:
-    uris = _operation_uri_set(operations)
+    operation_uris = _operation_uri_set(operations)
+    uris = set(operation_uris)
+    for uri in operation_uris:
+        normalized_uri = str(uri).rstrip("/")
+        directory, separator, _ = normalized_uri.rpartition("/")
+        if separator and directory:
+            uris.add(f"{directory}/.overview.md")
     uris.update(_link_endpoint_uri_set(list(operations.resolved_links or [])))
     for deleted_uri, replacement_uri in dict(operations.delete_replacements or {}).items():
         if deleted_uri:
