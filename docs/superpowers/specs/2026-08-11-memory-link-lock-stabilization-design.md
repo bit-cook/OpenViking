@@ -124,3 +124,38 @@ Add regression coverage for these observable behaviors:
 
 Run the focused streaming memory updater tests, the memory updater regression
 tests, Ruff checks for touched files, and `git diff --check`.
+
+## Follow-up: Post-group Link Remapping
+
+Grouped streaming updates have a second link-write path in
+`_apply_post_group_links`. All grouped requests have completed before this
+method runs, so both inputs that determine the final link endpoints are already
+stable: the request's resolved links and the combined result's
+`delete_replacements` map.
+
+The current ordering acquires exact locks for the original link endpoints and
+then remaps those endpoints. A case-normalizing replacement such as
+`entities/person/andrew.md` to `entities/person/Andrew.md` can therefore make
+`write_stored_links` write a path outside the lease.
+
+Three approaches were considered:
+
+1. Remap links first, then acquire exact locks for the remapped endpoints.
+   This is the smallest fix and covers every later write because validation
+   only filters links; it never changes or adds endpoints.
+2. Lock the union of original and remapped endpoints. This is correct but holds
+   locks that the post-remap validation and write path never use.
+3. Acquire the original range and release/reacquire if remapping expands it.
+   This adds an unnecessary unlocked window and retry lifecycle even though the
+   complete remapped range is already computable.
+
+Use option 1. `_apply_post_group_links` will merge and remap links before
+calling `_uri_lock_paths`. It will then acquire one exact-path batch lease,
+filter the remapped links, and write only endpoints already covered by that
+lease. No dynamic expansion or tree lock is needed on this path.
+
+Add a regression test whose original links use pre-replacement URIs and whose
+combined result maps them to differently cased replacement URIs. The test must
+observe that the acquired batch contains the replacement paths and that all
+link writes complete under that lease. The test must fail against the old
+ordering by surfacing the same lease-coverage rejection seen in Locomo.
