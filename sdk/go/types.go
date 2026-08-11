@@ -186,9 +186,11 @@ type SetTagsOptions struct {
 
 // ReindexOptions controls Reindex.
 type ReindexOptions struct {
-	Mode   string
-	Wait   bool
-	DryRun bool
+	Mode    string
+	Wait    bool
+	DryRun  bool
+	Tags    []string
+	TagMode string
 }
 
 // FindOptions controls Find.
