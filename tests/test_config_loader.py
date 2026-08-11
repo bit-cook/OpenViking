@@ -122,12 +122,12 @@ class TestRequireConfig:
             require_config(None, "TEST_MISSING_ENV", "nonexistent_file.conf", "test")
 
 
-def test_queue_worker_concurrency_defaults_to_four():
+def test_queue_worker_concurrency_uses_queue_specific_defaults():
     config = OpenVikingConfig.from_dict({})
 
     assert config.queue_workers.external_parse.max_concurrent == 4
     assert config.queue_workers.add_resource.max_concurrent == 4
-    assert config.queue_workers.session_commit.max_concurrent == 4
+    assert config.queue_workers.session_commit.max_concurrent == 50
 
 
 def test_queue_worker_concurrency_accepts_separate_values():
