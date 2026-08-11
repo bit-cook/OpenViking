@@ -128,7 +128,8 @@ class TestExtractLoopPatchRepair:
             files={
                 target_uri: MemoryFile(uri=target_uri, content="# Tim\n- Likes reading"),
                 other_uri: MemoryFile(
-                    uri=other_uri, content="# Other\n- Has been reading as usual"
+                    uri=other_uri,
+                    content="# Other\n- [Has been reading](./reading.md) as usual",
                 ),
             },
             responses=[
@@ -143,9 +144,94 @@ class TestExtractLoopPatchRepair:
         assert "Regenerate the complete operations JSON" in second_call_content
         assert target_uri in second_call_content
         assert other_uri in second_call_content
+        repair_section = second_call_content.split("Failed patch operations:\n", 1)[1]
+        assert '"block_index": 1' in repair_section
+        assert '"reason": "not_found"' in repair_section
+        assert '"match_count": 0' in repair_section
         assert (
             operations.upsert_operations[0].memory_fields["content"].blocks[0].search
             == "- Likes reading"
+        )
+
+    async def test_patch_repair_reports_actual_failing_block(self):
+        target_uri = "viking://user/default/memories/profile.md"
+        duplicate_search = "- Values friendship and compassion"
+        vlm, operations = await _run_patch_loop(
+            files={
+                target_uri: MemoryFile(
+                    uri=target_uri,
+                    content=(
+                        "# Caroline\n"
+                        "- Values friendship and compassion\n"
+                        "- Learning to play the piano\n\n"
+                        "# Melanie\n"
+                        "- Values friendship and compassion"
+                    ),
+                )
+            },
+            responses=[
+                '{"profile":[{"page_id":1,"content":{"blocks":['
+                '{"search":"- Learning to play the piano","replace":"- Learning to play the piano daily"},'
+                '{"search":"- Values friendship and compassion","replace":"- Values friendship and compassion\\n- Enjoys family activities"}'
+                ']} }],"delete_ids":[]}',
+                '{"profile":[{"page_id":1,"content":{"blocks":['
+                '{"search":"- Learning to play the piano","replace":"- Learning to play the piano daily"},'
+                '{"search":"# Melanie\\n- Values friendship and compassion","replace":"# Melanie\\n- Values friendship and compassion\\n- Enjoys family activities"}'
+                ']} }],"delete_ids":[]}',
+            ],
+        )
+
+        second_call_content = "\n".join(message["content"] for message in vlm.messages[1])
+        repair_section = second_call_content.split("Failed patch operations:\n", 1)[1]
+        assert '"block_index": 2' in repair_section
+        assert f'"search": "{duplicate_search}"' in repair_section
+        assert '"reason": "non_unique"' in repair_section
+        assert '"match_count": 2' in repair_section
+        assert operations.upsert_operations[0].memory_fields["content"].blocks[
+            1
+        ].search.startswith("# Melanie")
+
+    async def test_patch_validation_uses_sequential_working_content(self):
+        target_uri = "viking://user/default/memories/profile.md"
+        vlm, _operations = await _run_patch_loop(
+            files={
+                target_uri: MemoryFile(
+                    uri=target_uri,
+                    content="# Caroline\n- Shared value\n\n# Melanie\n- Shared value",
+                )
+            },
+            responses=[
+                '{"profile":[{"page_id":1,"content":{"blocks":['
+                '{"search":"# Caroline\\n- Shared value","replace":"# Caroline\\n- Caroline-only value"},'
+                '{"search":"- Shared value","replace":"- Melanie-only value"}'
+                ']} }],"delete_ids":[]}'
+            ],
+        )
+
+        assert len(vlm.messages) == 1
+
+    async def test_link_rendered_content_does_not_trigger_repair(self):
+        target_uri = "viking://user/default/memories/profile.md"
+        vlm, operations = await _run_patch_loop(
+            files={
+                target_uri: MemoryFile(
+                    uri=target_uri,
+                    content=(
+                        "# Maria\n"
+                        "- [Volunteers](../place/homeless_shelter.md) at a homeless shelter regularly"
+                    ),
+                )
+            },
+            responses=[
+                '{"profile":[{"page_id":1,"content":{"blocks":[{"search":"- Volunteers at a homeless shelter regularly","replace":"- Volunteers at a homeless shelter regularly (as of 2023-04-18)"}]} }],"delete_ids":[]}',
+                '{"profile":[],"delete_ids":[]}',
+            ],
+        )
+
+        assert len(vlm.messages) == 1
+        assert (
+            operations.upsert_operations[0].memory_fields["content"].blocks[0].search
+            == "- Volunteers at a homeless shelter regularly"
         )
 
     async def test_invalid_patch_search_repairs_only_once(self):
