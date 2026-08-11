@@ -150,7 +150,7 @@ class OpenVikingService:
         max_concurrent_semantic: int = 32,
         max_concurrent_external_parse: int = 4,
         max_concurrent_add_resource: int = 4,
-        max_concurrent_session_commit: int = 50,
+        max_concurrent_session_commit: int = 8,
         binding_config: Any = None,
         *,
         git_config: Optional[GitConfig] = None,

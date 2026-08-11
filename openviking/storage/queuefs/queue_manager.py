@@ -21,7 +21,7 @@ from .semantic_queue import SemanticQueue
 
 logger = get_logger(__name__)
 
-DEFAULT_MAX_CONCURRENT_SESSION_COMMIT = 50
+DEFAULT_MAX_CONCURRENT_SESSION_COMMIT = 8
 
 # ========== Singleton Pattern ==========
 _instance: Optional["QueueManager"] = None
