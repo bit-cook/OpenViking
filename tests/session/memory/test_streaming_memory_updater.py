@@ -86,7 +86,11 @@ class RecordingPathlockClient:
         self.active_lease = None
 
     async def pathlock_acquire_exact_batch(self, paths, timeout_secs=0.0):
-        lease = {"lease_ref": "memory-batch-lease"}
+        lease_number = len([event for event in self.events if event[0] == "acquire"]) + 1
+        lease_ref = (
+            "memory-batch-lease" if lease_number == 1 else f"memory-batch-lease-{lease_number}"
+        )
+        lease = {"lease_ref": lease_ref}
         self.active_lease = lease
         self.events.append(("acquire", tuple(paths), timeout_secs))
         return lease
@@ -112,6 +116,27 @@ class PathlockedInMemoryVikingFS(InMemoryVikingFS):
     async def write_file(self, uri: str, content: str, ctx=None, lease_ref=None):
         self.events.append(("write", uri, lease_ref))
         return await super().write_file(uri, content, ctx=ctx, lease_ref=lease_ref)
+
+
+class ChangingReadPathlockedInMemoryVikingFS(PathlockedInMemoryVikingFS):
+    def __init__(
+        self,
+        files: dict[str, str],
+        changing_uri: str,
+        changing_contents: list[str],
+    ):
+        super().__init__(files)
+        self.changing_uri = changing_uri
+        self.changing_contents = list(changing_contents)
+        self.changing_read_count = 0
+
+    async def read_file(self, uri: str, ctx=None):
+        if uri == self.changing_uri and self.changing_read_count < len(self.changing_contents):
+            content = self.changing_contents[self.changing_read_count]
+            self.changing_read_count += 1
+            self.events.append(("read", uri, self._async_agfs.active_lease))
+            return content
+        return await super().read_file(uri, ctx=ctx)
 
 
 def _canonical_user_uri(uri: str, ctx=None) -> str:
@@ -207,6 +232,46 @@ def _note_op(name: str) -> ResolvedOperation:
             "content": f"{name} content",
         },
     )
+
+
+def _persisted_note_content(
+    uri: str,
+    *,
+    links: list[dict[str, str]] | None = None,
+) -> str:
+    note_name = uri.rsplit("/", 1)[-1].removesuffix(".md")
+    return MemoryFileUtils.write(
+        MemoryFile(
+            uri=uri,
+            content=f"{note_name} content",
+            memory_type="notes",
+            extra_fields={"note_name": note_name},
+            links=list(links or []),
+        )
+    )
+
+
+def _replacement_update(
+    deleted_uri: str,
+) -> tuple[ResolvedOperations, MemoryUpdateRequest, list[Message]]:
+    replacement = _note_op("replacement")
+    operations = ResolvedOperations(
+        upsert_operations=[replacement],
+        delete_file_contents=[
+            MemoryFile(
+                uri=deleted_uri,
+                content="deleted content",
+                memory_type="notes",
+                extra_fields={"note_name": "deleted"},
+            )
+        ],
+        errors=[],
+        resolved_links=[],
+        delete_replacements={deleted_uri: replacement.uris[0]},
+    )
+    messages = [Message(id="m1", role="user", parts=[TextPart("replace note")])]
+    request = MemoryUpdateRequest(operations=operations, messages=messages, ctx=_ctx())
+    return operations, request, messages
 
 
 def _note_op_with_source(name: str, extraction_id: str) -> ResolvedOperation:
@@ -404,6 +469,181 @@ async def test_streaming_memory_updater_holds_batch_pathlock_across_apply(monkey
     assert fs.events[-1] == ("release", lease)
     assert ("write", operation.uris[0], lease) in fs.events
     assert all(event[-1] == lease for event in fs.events[1:-1])
+
+
+@pytest.mark.asyncio
+async def test_streaming_memory_updater_reacquires_for_persisted_delete_links_before_writes(
+    monkeypatch,
+):
+    deleted_uri = "viking://user/u/memories/notes/deleted.md"
+    neighbor_uri = "viking://user/u/memories/notes/neighbor.md"
+    deleted_content = _persisted_note_content(
+        deleted_uri,
+        links=[
+            {
+                "from_uri": deleted_uri,
+                "to_uri": neighbor_uri,
+                "link_type": "related_to",
+            }
+        ],
+    )
+    fs = PathlockedInMemoryVikingFS(
+        {
+            deleted_uri: deleted_content,
+            neighbor_uri: _persisted_note_content(neighbor_uri),
+        }
+    )
+    fs.search = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.get_viking_fs",
+        lambda: fs,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.memory_updater.get_viking_fs",
+        lambda: fs,
+    )
+    operations, request, messages = _replacement_update(deleted_uri)
+
+    await StreamingMemoryUpdater(registry=_registry())._apply_operations(
+        operations=operations,
+        request=request,
+        messages=messages,
+    )
+
+    acquire_events = [event for event in fs.events if event[0] == "acquire"]
+    write_events = [event for event in fs.events if event[0] == "write"]
+    neighbor_path = "/user/u/memories/notes/neighbor.md"
+    assert len(acquire_events) == 2
+    assert neighbor_path not in acquire_events[0][1]
+    assert neighbor_path in acquire_events[1][1]
+    assert fs.events.index(("release", {"lease_ref": "memory-batch-lease"})) < fs.events.index(
+        acquire_events[1]
+    )
+    assert write_events
+    assert all(event[2] == {"lease_ref": "memory-batch-lease-2"} for event in write_events)
+    assert fs.events.index(acquire_events[1]) < min(
+        fs.events.index(event) for event in write_events
+    )
+
+
+@pytest.mark.asyncio
+async def test_streaming_memory_updater_revalidates_changed_persisted_links(monkeypatch):
+    deleted_uri = "viking://user/u/memories/notes/deleted.md"
+    neighbor_a_uri = "viking://user/u/memories/notes/neighbor_a.md"
+    neighbor_b_uri = "viking://user/u/memories/notes/neighbor_b.md"
+    first_content = _persisted_note_content(
+        deleted_uri,
+        links=[
+            {
+                "from_uri": deleted_uri,
+                "to_uri": neighbor_a_uri,
+                "link_type": "related_to",
+            }
+        ],
+    )
+    second_content = _persisted_note_content(
+        deleted_uri,
+        links=[
+            {
+                "from_uri": deleted_uri,
+                "to_uri": neighbor_a_uri,
+                "link_type": "related_to",
+            },
+            {
+                "from_uri": deleted_uri,
+                "to_uri": neighbor_b_uri,
+                "link_type": "related_to",
+            },
+        ],
+    )
+    fs = ChangingReadPathlockedInMemoryVikingFS(
+        {
+            deleted_uri: second_content,
+            neighbor_a_uri: _persisted_note_content(neighbor_a_uri),
+            neighbor_b_uri: _persisted_note_content(neighbor_b_uri),
+        },
+        changing_uri=deleted_uri,
+        changing_contents=[first_content, second_content],
+    )
+    fs.search = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.get_viking_fs",
+        lambda: fs,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.memory_updater.get_viking_fs",
+        lambda: fs,
+    )
+    operations, request, messages = _replacement_update(deleted_uri)
+
+    await StreamingMemoryUpdater(registry=_registry())._apply_operations(
+        operations=operations,
+        request=request,
+        messages=messages,
+    )
+
+    acquire_events = [event for event in fs.events if event[0] == "acquire"]
+    write_events = [event for event in fs.events if event[0] == "write"]
+    assert len(acquire_events) == 3
+    assert "/user/u/memories/notes/neighbor_a.md" in acquire_events[2][1]
+    assert "/user/u/memories/notes/neighbor_b.md" in acquire_events[2][1]
+    assert write_events
+    assert all(event[2] == {"lease_ref": "memory-batch-lease-3"} for event in write_events)
+
+
+@pytest.mark.asyncio
+async def test_streaming_memory_updater_aborts_after_three_expanding_lock_acquisitions(
+    monkeypatch,
+):
+    deleted_uri = "viking://user/u/memories/notes/deleted.md"
+    neighbor_uris = [
+        "viking://user/u/memories/notes/neighbor_a.md",
+        "viking://user/u/memories/notes/neighbor_b.md",
+        "viking://user/u/memories/notes/neighbor_c.md",
+    ]
+    changing_contents = [
+        _persisted_note_content(
+            deleted_uri,
+            links=[
+                {
+                    "from_uri": deleted_uri,
+                    "to_uri": neighbor_uri,
+                    "link_type": "related_to",
+                }
+                for neighbor_uri in neighbor_uris[:count]
+            ],
+        )
+        for count in range(1, 4)
+    ]
+    fs = ChangingReadPathlockedInMemoryVikingFS(
+        {
+            deleted_uri: changing_contents[-1],
+            **{uri: _persisted_note_content(uri) for uri in neighbor_uris},
+        },
+        changing_uri=deleted_uri,
+        changing_contents=changing_contents,
+    )
+    fs.search = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.get_viking_fs",
+        lambda: fs,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.memory_updater.get_viking_fs",
+        lambda: fs,
+    )
+    operations, request, messages = _replacement_update(deleted_uri)
+
+    with pytest.raises(RuntimeError, match="after 3 acquisitions"):
+        await StreamingMemoryUpdater(registry=_registry())._apply_operations(
+            operations=operations,
+            request=request,
+            messages=messages,
+        )
+
+    assert len([event for event in fs.events if event[0] == "acquire"]) == 3
+    assert len([event for event in fs.events if event[0] == "release"]) == 3
+    assert fs.writes == []
 
 
 def test_operation_lock_paths_cover_deletes_replacements_and_link_endpoints():

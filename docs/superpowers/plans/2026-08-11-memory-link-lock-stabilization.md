@@ -28,7 +28,7 @@
 - Consumes: `_operation_lock_paths(operations, viking_fs, ctx) -> list[str]`, `_uri_lock_paths(uris, viking_fs, ctx) -> list[str]`, `MemoryFileUtils.read(content, uri=uri) -> MemoryFile`, and `ResolvedOperations.delete_replacements`.
 - Produces: `_acquire_stable_operation_lease(operations, viking_fs, ctx) -> Any | None`, returning a lease whose requested path set covers every persisted replacement-source link and backlink endpoint observed under that lease, or raising before mutation after three expanding observations.
 
-- [ ] **Step 1: Write all failing stabilization tests**
+- [x] **Step 1: Write all failing stabilization tests**
 
 Extend `RecordingPathlockClient` so each acquisition returns a distinct lease while preserving the first lease value expected by existing tests:
 
@@ -86,7 +86,7 @@ assert len([event for event in fs.events if event[0] == "release"]) == 3
 assert fs.writes == []
 ```
 
-- [ ] **Step 2: Run the new tests and verify RED**
+- [x] **Step 2: Run the new tests and verify RED**
 
 Run:
 
@@ -96,7 +96,7 @@ uv run pytest tests/session/memory/test_streaming_memory_updater.py -k 'reacquir
 
 Expected: all three tests FAIL because the current implementation acquires only once and never discovers persisted endpoints before mutation.
 
-- [ ] **Step 3: Implement persisted endpoint discovery and stable acquisition**
+- [x] **Step 3: Implement persisted endpoint discovery and stable acquisition**
 
 Add a constant and two module-level helpers near the existing lock-path helpers:
 
@@ -189,7 +189,7 @@ lease = await _acquire_stable_operation_lease(
 
 Retain the existing final release around `MemoryUpdater.apply_operations`.
 
-- [ ] **Step 4: Run the new tests and verify GREEN**
+- [x] **Step 4: Run the new tests and verify GREEN**
 
 Run:
 
@@ -199,7 +199,7 @@ uv run pytest tests/session/memory/test_streaming_memory_updater.py -k 'reacquir
 
 Expected: 3 passed.
 
-- [ ] **Step 5: Run the existing lease regression test**
+- [x] **Step 5: Run the existing lease regression test**
 
 Run:
 
@@ -209,7 +209,7 @@ uv run pytest tests/session/memory/test_streaming_memory_updater.py::test_stream
 
 Expected: 1 passed and exactly one acquisition remains for an operation without replacement inheritance.
 
-- [ ] **Step 6: Run focused regressions and static checks**
+- [x] **Step 6: Run focused regressions and static checks**
 
 Run:
 
@@ -222,7 +222,7 @@ git diff --check
 
 Expected: all commands exit 0 without new warnings.
 
-- [ ] **Step 7: Commit the implementation**
+- [x] **Step 7: Commit the implementation**
 
 ```bash
 git add openviking/session/memory/streaming_memory_updater.py tests/session/memory/test_streaming_memory_updater.py docs/superpowers/plans/2026-08-11-memory-link-lock-stabilization.md
