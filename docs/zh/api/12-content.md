@@ -660,6 +660,9 @@ console.log(await client.reindex("viking://resources/docs/", {
 
 **Go SDK**
 
+传入非 `nil` 的 `ReindexOptions` 时，需要显式设置 `Wait`。Go 的布尔零值为
+`false`；只有 `opts=nil` 时 SDK 才会应用 `wait=true` 的默认值。
+
 ```go
 result, err := client.Reindex(ctx, "viking://resources", &openviking.ReindexOptions{
     Mode: "vectors_only",

@@ -476,7 +476,7 @@ class ReindexExecutor:
             wait_tracker.register_request(telemetry_id)
 
         acquire_lock = service.viking_fs._async_agfs.pathlock_acquire_tree
-        if mode != "prune_orphans":
+        if mode != "prune_orphans" or await service.viking_fs.exists(uri, ctx=ctx):
             stat = await service.viking_fs.stat(uri, ctx=ctx)
             if not stat.get("isDir", stat.get("is_dir")):
                 acquire_lock = service.viking_fs._async_agfs.pathlock_acquire_exact

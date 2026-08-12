@@ -476,6 +476,138 @@ async def test_reindex_file_target_uses_exact_lock(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_reindex_prune_existing_file_uses_exact_lock(monkeypatch):
+    from types import SimpleNamespace
+
+    from openviking.service.reindex_executor import ReindexExecutor
+
+    calls = []
+
+    class FakeAGFS:
+        async def pathlock_acquire_exact(self, path):
+            calls.append(("exact", path))
+            return {"id": "lease-1"}
+
+        async def pathlock_acquire_tree(self, path):
+            calls.append(("tree", path))
+            raise AssertionError("existing file target must not acquire a tree lock")
+
+        async def pathlock_as_borrowed(self, lease):
+            return lease
+
+        async def pathlock_release(self, lease):
+            calls.append(("release", lease["id"]))
+
+    class FakeFS:
+        _async_agfs = FakeAGFS()
+
+        def _uri_to_path(self, uri, ctx):
+            return "/local/default/resources/demo.md"
+
+        async def exists(self, uri, ctx):
+            return True
+
+        async def stat(self, uri, ctx):
+            return {"isDir": False}
+
+    executor = ReindexExecutor()
+
+    async def fake_prune_orphan_vectors(**kwargs):
+        return None
+
+    monkeypatch.setattr(executor, "_prune_orphan_vectors", fake_prune_orphan_vectors)
+    monkeypatch.setattr(
+        "openviking.service.reindex_executor.get_service",
+        lambda: SimpleNamespace(
+            viking_fs=FakeFS(),
+            vikingdb_manager=SimpleNamespace(has_queue_manager=True),
+        ),
+    )
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice"),
+        role=Role.ROOT,
+    )
+
+    result = await executor._run(
+        uri="viking://resources/demo.md",
+        object_type="resource",
+        mode="prune_orphans",
+        dry_run=True,
+        ctx=ctx,
+    )
+
+    assert result["status"] == "completed"
+    assert calls == [
+        ("exact", "/local/default/resources/demo.md"),
+        ("release", "lease-1"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reindex_prune_missing_target_keeps_tree_lock(monkeypatch):
+    from types import SimpleNamespace
+
+    from openviking.service.reindex_executor import ReindexExecutor
+
+    calls = []
+
+    class FakeAGFS:
+        async def pathlock_acquire_exact(self, path):
+            raise AssertionError("missing target must retain tree lock scope")
+
+        async def pathlock_acquire_tree(self, path):
+            calls.append(("tree", path))
+            return {"id": "lease-1"}
+
+        async def pathlock_as_borrowed(self, lease):
+            return lease
+
+        async def pathlock_release(self, lease):
+            calls.append(("release", lease["id"]))
+
+    class FakeFS:
+        _async_agfs = FakeAGFS()
+
+        def _uri_to_path(self, uri, ctx):
+            return "/local/default/resources/missing"
+
+        async def exists(self, uri, ctx):
+            return False
+
+    executor = ReindexExecutor()
+
+    async def fake_prune_orphan_vectors(**kwargs):
+        return None
+
+    monkeypatch.setattr(executor, "_prune_orphan_vectors", fake_prune_orphan_vectors)
+    monkeypatch.setattr(
+        "openviking.service.reindex_executor.get_service",
+        lambda: SimpleNamespace(
+            viking_fs=FakeFS(),
+            vikingdb_manager=SimpleNamespace(has_queue_manager=True),
+        ),
+    )
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice"),
+        role=Role.ROOT,
+    )
+
+    result = await executor._run(
+        uri="viking://resources/missing",
+        object_type="resource",
+        mode="prune_orphans",
+        dry_run=True,
+        ctx=ctx,
+    )
+
+    assert result["status"] == "completed"
+    assert calls == [
+        ("tree", "/local/default/resources/missing"),
+        ("release", "lease-1"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_reindex_executor_passes_tags_to_background_run(monkeypatch):
     import asyncio
 
