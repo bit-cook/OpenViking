@@ -475,7 +475,12 @@ class ReindexExecutor:
         if telemetry_id:
             wait_tracker.register_request(telemetry_id)
 
-        lease = await service.viking_fs._async_agfs.pathlock_acquire_tree(path)
+        acquire_lock = service.viking_fs._async_agfs.pathlock_acquire_tree
+        if mode != "prune_orphans":
+            stat = await service.viking_fs.stat(uri, ctx=ctx)
+            if not stat.get("isDir", stat.get("is_dir")):
+                acquire_lock = service.viking_fs._async_agfs.pathlock_acquire_exact
+        lease = await acquire_lock(path)
         try:
             borrowed = await service.viking_fs._async_agfs.pathlock_as_borrowed(lease)
             run = _ReindexRunContext(

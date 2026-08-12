@@ -412,6 +412,70 @@ async def test_reindex_executor_ignores_tags_for_prune_orphans(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_reindex_file_target_uses_exact_lock(monkeypatch):
+    from types import SimpleNamespace
+
+    from openviking.service.reindex_executor import ReindexExecutor
+
+    calls = []
+
+    class FakeAGFS:
+        async def pathlock_acquire_exact(self, path):
+            calls.append(("exact", path))
+            return {"id": "lease-1"}
+
+        async def pathlock_acquire_tree(self, path):
+            calls.append(("tree", path))
+            raise AssertionError("file target must not acquire a tree lock")
+
+        async def pathlock_as_borrowed(self, lease):
+            return lease
+
+        async def pathlock_release(self, lease):
+            calls.append(("release", lease["id"]))
+
+    class FakeFS:
+        _async_agfs = FakeAGFS()
+
+        def _uri_to_path(self, uri, ctx):
+            return "/local/default/resources/demo.md"
+
+        async def stat(self, uri, ctx):
+            return {"isDir": False}
+
+    executor = ReindexExecutor()
+
+    async def fake_reindex_resource(*, uri, mode, run):
+        return None
+
+    monkeypatch.setattr(executor, "_reindex_resource", fake_reindex_resource)
+    monkeypatch.setattr(
+        "openviking.service.reindex_executor.get_service",
+        lambda: SimpleNamespace(
+            viking_fs=FakeFS(),
+            vikingdb_manager=SimpleNamespace(has_queue_manager=True),
+        ),
+    )
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice"),
+        role=Role.ROOT,
+    )
+
+    result = await executor._run(
+        uri="viking://resources/demo.md",
+        object_type="resource",
+        mode="vectors_only",
+        ctx=ctx,
+    )
+
+    assert result["status"] == "completed"
+    assert calls == [
+        ("exact", "/local/default/resources/demo.md"),
+        ("release", "lease-1"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_reindex_executor_passes_tags_to_background_run(monkeypatch):
     import asyncio
 
